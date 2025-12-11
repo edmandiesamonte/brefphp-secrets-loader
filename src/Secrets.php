@@ -23,11 +23,15 @@ class Secrets
             return;
         }
 
+        // Try to check if prefix is set
+        $ssmPrefix = $envVars['SSM_PREFIX'] ?? '';
+
         // Only consider environment variables that start with "bref-ssm:"
         $envVarsToDecrypt = array_filter($envVars, function (string $value): bool {
             return str_starts_with($value, 'bref-ssm:');
         });
-        if (empty($envVarsToDecrypt)) {
+
+        if (empty($envVarsToDecrypt) && empty($ssmPrefix)) {
             return;
         }
 
@@ -37,9 +41,9 @@ class Secrets
         }, $envVarsToDecrypt);
 
         $actuallyCalledSsm = false;
-        $parameters = self::readParametersFromCacheOr(function () use ($ssmClient, $ssmNames, &$actuallyCalledSsm) {
+        $parameters = self::readParametersFromCacheOr(function () use ($ssmClient, $ssmNames, &$actuallyCalledSsm, $ssmPrefix) {
             $actuallyCalledSsm = true;
-            return self::retrieveParametersFromSsm($ssmClient, array_values($ssmNames));
+            return self::retrieveParametersFromSsm($ssmClient, array_values($ssmNames), $ssmPrefix);
         });
 
         foreach ($parameters as $parameterName => $parameterValue) {
@@ -90,7 +94,7 @@ class Secrets
      * @param string[] $ssmNames
      * @return array<string, string> Map of parameter name -> value
      */
-    private static function retrieveParametersFromSsm(?SsmClient $ssmClient, array $ssmNames): array
+    private static function retrieveParametersFromSsm(?SsmClient $ssmClient, array $ssmNames, string $ssmPrefix): array
     {
         $ssm = $ssmClient ?? new SsmClient([
             'region' => $_ENV['AWS_REGION'] ?? $_ENV['AWS_DEFAULT_REGION'],
@@ -122,6 +126,33 @@ class Secrets
                 throw $e;
             }
             $parametersNotFound = array_merge($parametersNotFound, $result->getInvalidParameters());
+        }
+
+        if (! empty($ssmPrefix)) {
+            try {
+                $nextToken = null;
+                do {
+                    $result = $ssm->getParametersByPath([
+                        'Path' => $ssmPrefix,
+                        'WithDecryption' => true,
+                        'NextToken' => $nextToken,
+                    ]);
+
+                    foreach ($result->getParameters() as $parameter) {
+                        $parameters[$parameter->getName()] = $parameter->getValue();
+                    }
+                } while (($nextToken = $result->getNextToken()));
+            } catch (RuntimeException $e) {
+                if ($e->getCode() === 400) {
+                    // Extra descriptive error message for the most common error
+                    throw new RuntimeException(
+                        "Bref was not able to resolve secrets contained in environment variables from SSM because of a permissions issue with the SSM API. Did you add IAM permissions in serverless.yml to allow Lambda to access SSM? (docs: https://bref.sh/docs/environment/variables.html#at-deployment-time).\nFull exception message: {$e->getMessage()}",
+                        $e->getCode(),
+                        $e,
+                    );
+                }
+                throw $e;
+            }
         }
 
         if (count($parametersNotFound) > 0) {
