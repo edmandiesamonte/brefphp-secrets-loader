@@ -3,6 +3,7 @@
 namespace Bref\Secrets\Test;
 
 use AsyncAws\Core\Test\ResultMockFactory;
+use AsyncAws\Ssm\Result\GetParametersByPathResult;
 use AsyncAws\Ssm\Result\GetParametersResult;
 use AsyncAws\Ssm\SsmClient;
 use AsyncAws\Ssm\ValueObject\Parameter;
@@ -64,11 +65,42 @@ class SecretsTest extends TestCase
         Secrets::loadSecretEnvironmentVariables($ssmClient);
     }
 
+    public function test_loads_parameters_by_prefix(): void
+    {
+        putenv('SSM_PREFIX=/myapp/prod');
+        putenv('SOME_OTHER_VARIABLE=helloworld');
+
+        Secrets::loadSecretEnvironmentVariables($this->mockSsmClientWithPrefix());
+
+        $this->assertSame('secret_db_pass', getenv('DB_PASSWORD'));
+        $this->assertSame('secret_db_pass', $_SERVER['DB_PASSWORD']);
+        $this->assertSame('secret_db_pass', $_ENV['DB_PASSWORD']);
+        $this->assertSame('secret_api_key', getenv('API_KEY'));
+        $this->assertSame('secret_api_key', $_SERVER['API_KEY']);
+        $this->assertSame('secret_api_key', $_ENV['API_KEY']);
+        // Check that the other variable was not modified
+        $this->assertSame('helloworld', getenv('SOME_OTHER_VARIABLE'));
+    }
+
+    public function test_loads_both_bref_ssm_and_prefix_parameters(): void
+    {
+        putenv('SOME_VARIABLE=bref-ssm:/some/parameter');
+        putenv('SSM_PREFIX=/myapp/prod');
+
+        Secrets::loadSecretEnvironmentVariables($this->mockSsmClientWithBoth());
+
+        // bref-ssm: parameter
+        $this->assertSame('foobar', getenv('SOME_VARIABLE'));
+        // prefix parameters
+        $this->assertSame('secret_db_pass', getenv('DB_PASSWORD'));
+        $this->assertSame('secret_api_key', getenv('API_KEY'));
+    }
+
     private function mockSsmClient(): SsmClient
     {
         $ssmClient = $this->getMockBuilder(SsmClient::class)
             ->disableOriginalConstructor()
-            ->onlyMethods(['getParameters'])
+            ->onlyMethods(['getParameters', 'getParametersByPath'])
             ->getMock();
 
         $result = ResultMockFactory::create(GetParametersResult::class, [
@@ -87,6 +119,87 @@ class SecretsTest extends TestCase
                 'WithDecryption' => true,
             ])
             ->willReturn($result);
+
+        return $ssmClient;
+    }
+
+    private function mockSsmClientWithPrefix(): SsmClient
+    {
+        $ssmClient = $this->getMockBuilder(SsmClient::class)
+            ->disableOriginalConstructor()
+            ->onlyMethods(['getParameters', 'getParametersByPath'])
+            ->getMock();
+
+        $result = ResultMockFactory::create(GetParametersByPathResult::class, [
+            'Parameters' => [
+                new Parameter([
+                    'Name' => '/myapp/prod/DB_PASSWORD',
+                    'Value' => 'secret_db_pass',
+                ]),
+                new Parameter([
+                    'Name' => '/myapp/prod/API_KEY',
+                    'Value' => 'secret_api_key',
+                ]),
+            ],
+        ]);
+
+        $ssmClient->expects($this->once())
+            ->method('getParametersByPath')
+            ->with([
+                'Path' => '/myapp/prod',
+                'WithDecryption' => true,
+                'NextToken' => null,
+            ])
+            ->willReturn($result);
+
+        return $ssmClient;
+    }
+
+    private function mockSsmClientWithBoth(): SsmClient
+    {
+        $ssmClient = $this->getMockBuilder(SsmClient::class)
+            ->disableOriginalConstructor()
+            ->onlyMethods(['getParameters', 'getParametersByPath'])
+            ->getMock();
+
+        $getParametersResult = ResultMockFactory::create(GetParametersResult::class, [
+            'Parameters' => [
+                new Parameter([
+                    'Name' => '/some/parameter',
+                    'Value' => 'foobar',
+                ]),
+            ],
+        ]);
+
+        $ssmClient->expects($this->once())
+            ->method('getParameters')
+            ->with([
+                'Names' => ['/some/parameter'],
+                'WithDecryption' => true,
+            ])
+            ->willReturn($getParametersResult);
+
+        $getParametersByPathResult = ResultMockFactory::create(GetParametersByPathResult::class, [
+            'Parameters' => [
+                new Parameter([
+                    'Name' => '/myapp/prod/DB_PASSWORD',
+                    'Value' => 'secret_db_pass',
+                ]),
+                new Parameter([
+                    'Name' => '/myapp/prod/API_KEY',
+                    'Value' => 'secret_api_key',
+                ]),
+            ],
+        ]);
+
+        $ssmClient->expects($this->once())
+            ->method('getParametersByPath')
+            ->with([
+                'Path' => '/myapp/prod',
+                'WithDecryption' => true,
+                'NextToken' => null,
+            ])
+            ->willReturn($getParametersByPathResult);
 
         return $ssmClient;
     }

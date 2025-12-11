@@ -48,6 +48,15 @@ class Secrets
 
         foreach ($parameters as $parameterName => $parameterValue) {
             $envVar = array_search($parameterName, $ssmNames, true);
+
+            if (
+                $envVar === false
+                && ! empty($ssmPrefix)
+                && str_starts_with($parameterName, $ssmPrefix)
+            ) {
+                $envVar = ltrim(str_replace($ssmPrefix, '', $parameterName), '/');
+            }
+
             $_SERVER[$envVar] = $_ENV[$envVar] = $parameterValue;
             putenv("$envVar=$parameterValue");
         }
