@@ -144,7 +144,6 @@ class Secrets
         }
 
         if (! empty($ssmPrefix)) {
-            error_log("Loading SSM parameters from prefix: $ssmPrefix");
             try {
                 $nextToken = null;
                 do {
