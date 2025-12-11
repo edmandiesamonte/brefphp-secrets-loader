@@ -17,6 +17,7 @@ class Secrets
      */
     public static function loadSecretEnvironmentVariables(?SsmClient $ssmClient = null): void
     {
+
         /** @var array<string,string>|string|false $envVars */
         $envVars = getenv(local_only: true);
         if (! is_array($envVars)) {
@@ -46,6 +47,7 @@ class Secrets
             return self::retrieveParametersFromSsm($ssmClient, array_values($ssmNames), $ssmPrefix);
         });
 
+        $loadedEnvVars = [];
         foreach ($parameters as $parameterName => $parameterValue) {
             $envVar = array_search($parameterName, $ssmNames, true);
 
@@ -59,14 +61,18 @@ class Secrets
 
             $_SERVER[$envVar] = $_ENV[$envVar] = $parameterValue;
             putenv("$envVar=$parameterValue");
+            $loadedEnvVars[] = $envVar;
         }
 
-        // Only log once (when the cache was empty) else it might spam the logs in the function runtime
-        // (where the process restarts on every invocation)
-        if ($actuallyCalledSsm) {
-            $stderr = fopen('php://stderr', 'ab');
-            fwrite($stderr, '[Bref] Loaded these environment variables from SSM: ' . implode(', ', array_keys($envVarsToDecrypt)) . PHP_EOL);
-        }
+        // // Only log once (when the cache was empty) else it might spam the logs in the function runtime
+        // // (where the process restarts on every invocation)
+        // if ($actuallyCalledSsm && count($loadedEnvVars) > 0) {
+        //     $stderr = fopen('php://stderr', 'ab');
+        //     fwrite($stderr, '[Bref] Loaded SSM parameters into environment variables: ' . implode(', ', $loadedEnvVars) . PHP_EOL);
+        // }
+
+        $stderr = fopen('php://stderr', 'ab');
+        fwrite($stderr, '[Bref] Loaded SSM parameters into environment variables: ' . implode(', ', $loadedEnvVars) . PHP_EOL);
     }
 
     /**
